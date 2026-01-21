@@ -47,4 +47,4 @@ Thumbs.db
 github_events.db
 data/
 src/github_events.db
-
+src/.env
