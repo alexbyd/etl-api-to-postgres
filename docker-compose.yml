@@ -1,0 +1,35 @@
+services:
+  destination_postgres:
+    image: postgres:15
+    container_name: destination_postgres
+    ports:
+      - '5434:5432'
+    networks:
+      - etl
+    environment:
+      POSTGRES_DB: github_events
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      # postgres no tiene volumenes, la data se pierde al eliminar el contenedor
+    healthcheck:
+      test: ["CMD","pg_isready -U admin -d github_events"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  etl_script:
+    build:
+      context: src
+      dockerfile: Dockerfile
+    container_name: etl_script
+    command: ['python','pipeline.py' ]
+    volumes:
+      # Directorio de código → /src en contenedor
+      - ./src:/src
+      # Directorio de datos → /src/data en contenedor
+      - ./data:/data
+    networks:
+      - etl
+networks:
+  etl:
+    driver: bridge
