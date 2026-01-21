@@ -1,4 +1,12 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+pyvenv.cfg
+
 # Python
 __pycache__/
 *.py[cod]
@@ -21,15 +29,16 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
+.coverage
+*.cover
+.hypothesis/
+.tox/
+.ipynb_checkpoints/
 
-# Virtual Environments
-.venv/
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
+# IDE
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
@@ -46,5 +55,4 @@ Thumbs.db
 # Project specific
 github_events.db
 data/
-src/github_events.db
 src/.env
