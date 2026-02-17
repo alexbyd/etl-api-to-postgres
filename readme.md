@@ -1,94 +1,116 @@
-# etl-api-to-postgres
 
-Este proyecto describe el proceso de: extracción de datos desde una API, containerización con Docker, gestión de autenticación API, manejo de paginación, serialización en formato JSON, verificación de conexión a base de datos y carga de datos en tablas.
+---
 
-<h2>Tecnologias Usadas</h2>
+# GitHub Events ETL Pipeline
 
-* Docker
-* Postgres
-* Python
+Este proyecto es un pipeline de ingeniería de datos robusto que extrae, transforma y carga (ETL) eventos en tiempo real de la API de GitHub. Utiliza **Apache Spark** para el procesamiento distribuido y **PostgreSQL** como almacenamiento persistente, todo orquestado mediante **Docker**.
 
-## To start this project
+##  Arquitectura del Sistema
 
-### create a `.env` file
+El pipeline está diseñado siguiendo las mejores prácticas de portabilidad y escalabilidad:
 
-Create a .env file in the root of your project and get the following token from GitHub.
-
-```
- GITHUB_TOKEN= Aqui el token
-```
-In the project directory, you need to:
-### `docker compose up --build `
-
-Install all the packages
-
-![run-on-terminal](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExcjgzamRveWFiM21qbGJ1NTJhZWowNzE3c2Jub2tiZDc3a2FtdGw1dyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/y4Pjh8raB5PkIAdBMn/giphy.gif)
-
-<h2>Resumen</h2>
-
-* Verificamos que la base de datos este recibiendo connections:
-check_db_connection()
-* Conectamos la api y extraemos los datos: batch_data_fetch()
-* Normalizamos y creamos el esquema: process_event()
-* Carga de datos en tablas
-
-<h2>Features piece of code no.1</h2>
+1. **Extracción (API REST):** Consumo de la API de GitHub con manejo de paginación automática mediante el recorrido de encabezados `Link`.
+2. **Procesamiento (Apache Spark):** * Limpieza y tipado de datos crudos.
+* **Flattening:** Aplanado de estructuras JSON anidadas (campos de `actor`).
+* **Schema Enforcement:** Definición estricta de tipos (`StructType`) para asegurar la integridad.
 
 
-``` Python
+3. **Carga (PostgreSQL):** Persistencia de los datos transformados mediante JDBC.
 
-def batch_data_fetch():
+##  Stack Tecnológico
 
-    TOKEN_GIT = os.getenv("GITHUB_TOKEN")
-    page_number = 0
-    base_url = "url"
+* **Lenguaje:** Python 3.11
+* **Procesamiento:** PySpark (Apache Spark 3.x)
+* **Base de Datos:** PostgreSQL 15
+* **Infraestructura:** Docker & Docker Compose
+* **Entorno:** Virtualenv / JRE (Java Runtime Environment) en contenedor.
 
-    headers = {"Authorization": f"Bearer {TOKEN_GIT}"}
-    all_events = []
+##  Modelo de Datos (Esquema Spark)
 
-    while True:
+El pipeline transforma los eventos complejos en una tabla relacional limpia:
 
-        response = requests.get(base_url, headers=headers)
+| Columna | Tipo | Descripción |
+| --- | --- | --- |
+| `id` | `String` | ID único del evento |
+| `type` | `String` | Tipo de evento (WatchEvent, ForkEvent, etc.) |
+| `public` | `Boolean` | Visibilidad del evento |
+| `created_at` | `Timestamp` | Fecha de creación formateada |
+| `actor__id` | `Long` | ID del usuario (aplanado) |
+| `actor__login` | `String` | Username de GitHub (aplanado) |
 
-        if response.status_code != 200:
-            print(f"error: Status code {response.status_code}")
-            break
+---
 
-        page_data = response.json()
-        print(f"Pagina {page_number}: {len(page_data)} eventos")
-        all_events.extend(page_data)     
+##  Instalación y Ejecución
 
-        next_page = response.links.get("next",{}).get("url")
-        print(response.links)  
-        page_number += 1
-        base_url = next_page
+No es necesario instalar Java o Spark localmente. Gracias a Docker, el entorno está listo para usarse:
 
-        if next_page is None:
-            print("No hay mas paginas")
-            break   
-
-        with open(f"/data/page_{page_number}.json", "w") as f:
-            json.dump(page_data, f)
-
-    return all_events
+1. **Clonar el repositorio:**
+```bash
+git clone https://github.com/alexbyd/etl-api-to-postgres
+cd data-engineer
 
 ```
 
-<h2>Features piece of code no.2</h2>
 
-
-``` Docker
-
-FROM python:3.11-slim
-
-RUN apt-get update && apt-get install -y postgresql-client
-
-WORKDIR /src
-
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-CMD ["python", "pipeline.py"]
+2. **Levantar la infraestructura:**
+```bash
+docker compose up --build
 
 ```
+
+
+
+El servicio `etl_script` se encargará de procesar las páginas de la API y cerrar automáticamente al finalizar con un código de éxito.
+
+---
+
+##  Análisis de Datos (SQL)
+
+Una vez que el pipeline finaliza, puedes ejecutar estas consultas en PostgreSQL para extraer insights de los datos recolectados:
+
+### 1. Resumen de Actividad por Tipo de Evento
+
+```sql
+SELECT
+    type,
+    COUNT(*) AS total_eventos
+FROM github_events_spark
+GROUP BY type
+ORDER BY total_eventos DESC;
+
+```
+
+### 2. Top 5 Usuarios más Activos
+
+```sql
+SELECT
+    actor__login,
+    COUNT(*) AS cantidad_acciones
+FROM github_events_spark
+GROUP BY actor__login
+ORDER BY cantidad_acciones DESC
+LIMIT 5;
+
+```
+
+### 3. Distribución Temporal (Eventos por Hora)
+
+```sql
+SELECT
+    DATE_TRUNC('hour', created_at) AS hora,
+    COUNT(*) AS eventos
+FROM github_events_spark
+GROUP BY hora
+ORDER BY hora ASC;
+
+```
+
+---
+
+##  Detalles de Implementación
+
+* **Network:** El contenedor de Spark se comunica con la base de datos a través de la red interna de Docker usando el host `destination_postgres`.
+* **Resiliencia:** El script incluye un sistema de reintentos para esperar a que la base de datos esté lista antes de intentar la conexión JDBC.
+* **Paginación:** Capacidad de recorrer hasta 10 páginas de la API (aprox. 300 eventos por corrida).
+
+---

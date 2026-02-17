@@ -1,6 +1,12 @@
 #Grabbing data from an API 
 #Cargas las paginas a la base de Datos
 
+import os
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, LongType, BooleanType
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
 import psycopg2
 import requests
 import json
@@ -10,9 +16,18 @@ from dotenv import load_dotenv
 import os
 import pandas as pd
 
+
+spark = SparkSession.builder \
+    .appName("GitHubAnalyticsStrict") \
+    .config("spark.jars", "./postgresql-42.7.2.jar") \
+    .getOrCreate()
+
 max_retries = 2
 host = "destination_postgres"
 port='5432'
+
+# host = "localhost"
+
 
 def check_db_connection(max_retries,host,user=None, password=None):
     retries = 0
@@ -71,7 +86,7 @@ def batch_data_fetch():
             print("No hay mas paginas")
             break   
 
-        with open(f"/data/page_{page_number}.json", "w") as f:
+        with open(f"../data/page_{page_number}.json", "w") as f:
             json.dump(page_data, f)
 
     return all_events
@@ -83,75 +98,52 @@ event = batch_data_fetch()
 print(event[0].keys())
 # dict_keys(['id', 'type', 'actor', 'repo', 'payload', 'public', 'created_at', 'org'])
 
+#========================================================================
+
 def process_event(event):
     result = {}
-
     result['id'] = event['id']
     result['type'] = event['type']
     result['public'] = event['public']
     result['created_at'] = event['created_at']
     result['actor__id'] = event['actor']['id']
     result['actor__login'] = event['actor']['login']
-
     return result
 
-processed_events = []
+processed_events = [process_event(e) for e in event]
 
-for events in event:
-    processed_event = process_event(events)
-    processed_events.append(processed_event)
+schema = StructType([
+    StructField("id", StringType(), True),
+    StructField("type", StringType(), True),
+    StructField("public", BooleanType(), True),
+    StructField("created_at", StringType(), True),
+    StructField("actor__id", LongType(), True),
+    StructField("actor__login", StringType(), True)
+])
 
-print(processed_events[:1])
+processed_events = [process_event(e) for e in event]
+df = spark.createDataFrame(processed_events, schema=schema)
 
-#Agregar menejo de errores por si no coneccion a internet o a base de Datos o a docker
+df_final = df.withColumn("created_at", F.to_timestamp("created_at"))
 
-conn = psycopg2.connect(
-        user = 'postgres',
-        password = 'secret',
-        host = 'destination_postgres',
-        port = 5432,
-        database = 'github_events'
-    )
+print("Esquema definido en Spark:")
+df_final.printSchema()
+df_final.show(5)
 
-db = conn.cursor()
+# Escritura a PostgreSQL
+try:
+    df_final.write \
+        .format("jdbc") \
+        .option("url", "jdbc:postgresql://destination_postgres:5432/github_events")\
+        .option("dbtable", "github_events_spark") \
+        .option("user", "postgres") \
+        .option("password", "secret") \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("append") \
+        .save()
+except Exception as e:
+    print(f"Error al cargar en Postgres: {e}")
 
-print(db)
-db.execute("""
-CREATE TABLE IF NOT EXISTS github_events(
-             id TEXT PRIMARY KEY,
-             type TEXT,
-             public BOOLEAN,
-             created_at TEXT,
-             actor__id BIGINT,
-             actor__login TEXT
-             );
-             """)
-
-flattened_data = [
-        (
-            record["id"],
-            record["type"],
-            record["public"],
-            record["created_at"],
-            record["actor__id"],
-            record["actor__login"]
-         )
-         for record in processed_events
-]
-
-db.executemany("""
-INSERT INTO github_events (id, type, public, created_at, actor__id, actor__login)
-VALUES (%s, %s, %s, %s, %s, %s)
-ON CONFLICT DO NOTHING;
-""", flattened_data)
-
-print("Data successfully loaded into PostgresQL!")
+spark.stop()
 
 
-# Query and Print Data
-# df = db.execute("SELECT * FROM github_events limit 2")
-df = pd.read_sql_query("SELECT * FROM github_events LIMIT 2", conn)
-db.close()
-
-print("\nGitHub Events Data:")
-print(df)
